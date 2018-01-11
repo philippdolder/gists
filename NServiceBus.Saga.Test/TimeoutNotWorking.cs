@@ -1,7 +1,9 @@
 namespace SagaNotWorking
 {
     using System;
+    using System.Linq;
     using System.Threading.Tasks;
+    using FluentAssertions;
     using NServiceBus;
     using NServiceBus.Testing;
     using NServiceBus.Timeout.Core;
@@ -13,10 +15,23 @@ namespace SagaNotWorking
         public void ExpectTimeoutFails()
         {
             var saga = new TestSaga();
-            var executeOn = DateTime.Now.AddHours(1);
+            var executeOn = 31.January(2019).At(10, 35).AsLocal();
             Test.Saga(saga)
                 .ExpectTimeoutToBeSetAt<TimeoutData>((state, time) => time == executeOn)
-                .When((s, c) => s.Handle(new StartSagaCommand { Id = Guid.NewGuid(), ExecutionTime = executeOn }, c));
+                .When((s, c) => s.Handle(new StartSagaCommand { Id = new Guid("22222222-2222-2222-2222-222222222222"), ExecutionTime = executeOn }, c));
+        }
+
+        [Test]
+        public async Task ExpectTimeoutFails_WithNewTestingFramework()
+        {
+            var saga = new TestSaga { Data = new MySagaData { Id = new Guid("11111111-1111-1111-1111-111111111111") } };
+            var executeOn = 31.January(2019).At(10, 35).AsLocal();
+
+            var context = new TestableMessageHandlerContext();
+            await saga.Handle(new StartSagaCommand { Id = new Guid("22222222-2222-2222-2222-222222222222"), ExecutionTime = executeOn }, context).ConfigureAwait(false);
+
+            var sentMessage = context.SentMessages.SingleOrDefault();
+            sentMessage.Message<TimeoutData>().Time.Should().Be(executeOn);
         }
     }
 
@@ -24,13 +39,14 @@ namespace SagaNotWorking
     {
         protected override void ConfigureHowToFindSaga(SagaPropertyMapper<MySagaData> mapper)
         {
-            mapper.ConfigureMapping<StartSagaCommand>(m => m.Id);
-            mapper.ConfigureMapping<CompleteSagaCommand>(m => m.Id);
+            mapper.ConfigureMapping<StartSagaCommand>(m => m.Id)
+                .ToSaga(_ => _.TheId);
+            mapper.ConfigureMapping<CompleteSagaCommand>(m => m.SagaId)
+                .ToSaga(_ => _.TheId);
         }
 
         public Task Handle(StartSagaCommand message, IMessageHandlerContext context)
         {
-            this.Data.Id = message.Id;
             return this.RequestTimeout<TimeoutData>(context, message.ExecutionTime);
         }
 
@@ -41,21 +57,18 @@ namespace SagaNotWorking
 
         public Task Timeout(TimeoutData state, IMessageHandlerContext context)
         {
-            context.SendLocal(new CompleteSagaCommand { Id = state.SagaId });
-            return Task.CompletedTask;
+            return context.SendLocal(new CompleteSagaCommand { SagaId = state.SagaId });
         }
     }
 
-    public class MySagaData : IContainSagaData
+    public class MySagaData : ContainSagaData
     {
-        public string Originator { get; set; }
-        public string OriginalMessageId { get; set; }
-
-        public Guid Id { get; set; }
+        public Guid TheId { get; set; }
     }
+
     public class CompleteSagaCommand
     {
-        public Guid Id { get; set; }
+        public Guid SagaId { get; set; }
     }
 
     public class StartSagaCommand
